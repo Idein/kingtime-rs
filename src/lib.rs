@@ -503,14 +503,3 @@ pub mod daily_workings {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn it_works() {
-        let token = std::env::var("KINGTIME_ACCESS_TOKEN").unwrap();
-        println!("{:?}", daily_workings::get(&token).await.unwrap());
-    }
-}
