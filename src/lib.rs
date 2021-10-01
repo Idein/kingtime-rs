@@ -2,6 +2,23 @@ use reqwest::header::{self, HeaderMap};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 
+// KoT API only correctly recognizes iso8061 strings with +09:00
+mod ts_seconds_jst {
+    use chrono::{DateTime, FixedOffset, SecondsFormat, Utc};
+    use serde::ser::Serializer;
+    use serde::Serialize;
+
+    pub fn serialize<S>(value: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let str = value.to_rfc3339_opts(SecondsFormat::Secs, false);
+        let value: DateTime<Utc> = str.parse().unwrap();
+        let datetime = value + FixedOffset::east(9 * 3600);
+        datetime.to_rfc3339().serialize(serializer)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum Response<R> {
@@ -257,7 +274,9 @@ pub mod daily_workings {
         #[serde(rename_all = "camelCase")]
         pub struct Request {
             pub date: NaiveDate,
+            #[serde(with = "crate::ts_seconds_jst")]
             pub time: DateTime<Utc>,
+            pub code: Code,
         }
 
         #[test]
@@ -265,12 +284,14 @@ pub mod daily_workings {
             let req = Request {
                 date: "2016-05-01".parse().unwrap(),
                 time: "2016-05-01T09:00:00+09:00".parse().unwrap(),
+                code: Code::BreakEnd,
             };
 
             let json = r##"
             {
                 "date": "2016-05-01",
-                "time": "2016-05-01T00:00:00Z"
+                "time": "2016-05-01T00:00:00Z",
+                "code": "4"
             }
             "##;
 
@@ -332,8 +353,8 @@ pub mod daily_workings {
         pub enum Code {
             In,
             Out,
-            BreakIn,
-            BreakOut,
+            BreakStart,
+            BreakEnd,
         }
 
         struct CodeVisitor;
@@ -352,8 +373,8 @@ pub mod daily_workings {
                 let c = match v {
                     "1" => Code::In,
                     "2" => Code::Out,
-                    "3" => Code::BreakIn,
-                    "4" => Code::BreakOut,
+                    "3" => Code::BreakStart,
+                    "4" => Code::BreakEnd,
                     _ => return Err(E::custom(format!("unknown code: {}", v))),
                 };
                 Ok(c)
@@ -377,8 +398,8 @@ pub mod daily_workings {
                 match self {
                     Code::In => serializer.serialize_str("1"),
                     Code::Out => serializer.serialize_str("2"),
-                    Code::BreakIn => serializer.serialize_str("3"),
-                    Code::BreakOut => serializer.serialize_str("4"),
+                    Code::BreakStart => serializer.serialize_str("3"),
+                    Code::BreakEnd => serializer.serialize_str("4"),
                 }
             }
         }
