@@ -1,6 +1,19 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use kingtime::daily_workings::timerecord::{Code, Request, TimeRecord};
 
+fn get_access_token() -> String {
+    std::env::var("TC_KINGTIME_ACCESS_TOKEN")
+        .expect("environment variable TC_KINGTIME_ACCESS_TOKEN is unset")
+}
+
+async fn get_employee_key() -> String {
+    let code = std::env::var("TC_EMPLOYEE_NUMBER")
+        .expect("environment variable TC_EMPLOYEE_NUMBER is unset");
+    let token = get_access_token();
+    let resp = kingtime::employees::get(&token, &code).await.unwrap();
+    resp.key
+}
+
 fn today() -> NaiveDate {
     Utc::today().naive_local()
 }
@@ -10,8 +23,8 @@ fn now() -> DateTime<Utc> {
 }
 
 async fn get_my_timerecords(date: NaiveDate) -> Vec<TimeRecord> {
-    let token = std::env::var("KINGTIME_ACCESS_TOKEN").unwrap();
-    let key = std::env::var("KINGTIME_KEY").unwrap();
+    let token = get_access_token();
+    let key = get_employee_key().await;
 
     let resp = kingtime::daily_workings::timerecord::get(&token, &[&key], date, date)
         .await
@@ -30,8 +43,8 @@ async fn get_my_timerecords(date: NaiveDate) -> Vec<TimeRecord> {
 }
 
 async fn timecard(code: Code) {
-    let token = std::env::var("KINGTIME_ACCESS_TOKEN").unwrap();
-    let key = std::env::var("KINGTIME_KEY").unwrap();
+    let token = get_access_token();
+    let key = get_employee_key().await;
 
     let req = Request {
         date: today(),

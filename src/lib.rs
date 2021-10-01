@@ -124,6 +124,27 @@ async fn post<S: Serialize + ?Sized, D: DeserializeOwned>(
     }
 }
 
+pub mod employees {
+    use super::Result;
+    use serde::Deserialize;
+
+    pub async fn get(access_token: &str, code: &str) -> Result<Response> {
+        crate::get(
+            access_token,
+            &format!("https://api.kingtime.jp/v1.0/employees/{}", code),
+        )
+        .await
+    }
+
+    #[derive(Debug, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct Response {
+        pub last_name: String,
+        pub first_name: String,
+        pub key: String,
+    }
+}
+
 pub mod daily_workings {
     use super::Result;
     use chrono::NaiveDate;
