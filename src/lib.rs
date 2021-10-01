@@ -11,8 +11,8 @@ enum Response<R> {
 
 #[derive(Debug, Deserialize)]
 pub struct ErrorData {
-    message: String,
-    code: u32,
+    pub message: String,
+    pub code: u32,
 }
 
 #[derive(Debug, Error)]
@@ -39,6 +39,35 @@ async fn get<D: DeserializeOwned>(access_token: &str, api: &str) -> Result<D> {
     let resp: Response<D> = reqwest::Client::new()
         .get(api)
         .headers(headers)
+        .send()
+        .await?
+        .json()
+        .await?;
+    match resp {
+        Response::Error { errors } => Err(Error::Api(errors)),
+        Response::Ok(data) => Ok(data),
+    }
+}
+
+async fn get_with_query<D: DeserializeOwned>(
+    access_token: &str,
+    api: &str,
+    query: &impl Serialize,
+) -> Result<D> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        "application/json; charset=utf-8".parse().unwrap(),
+    );
+    headers.insert(
+        header::AUTHORIZATION,
+        format!("Bearer {}", access_token).parse().unwrap(),
+    );
+
+    let resp: Response<D> = reqwest::Client::new()
+        .get(api)
+        .headers(headers)
+        .query(query)
         .send()
         .await?
         .json()
@@ -80,6 +109,7 @@ async fn post<S: Serialize + ?Sized, D: DeserializeOwned>(
 
 pub mod daily_workings {
     use super::Result;
+    use chrono::NaiveDate;
     use serde::Deserialize;
 
     pub async fn get(access_token: &str) -> Result<Response> {
@@ -87,20 +117,20 @@ pub mod daily_workings {
     }
 
     #[derive(Debug, Deserialize)]
-    pub struct Response(Vec<DailyWorkings>);
+    pub struct Response(pub Vec<DailyWorkings>);
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct DailyWorkings {
-        date: String,
-        daily_workings: Vec<DailyWorking>,
+        pub date: NaiveDate,
+        pub daily_workings: Vec<DailyWorking>,
     }
 
     #[derive(Debug, Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct DailyWorking {
-        date: String,
-        employee_key: String,
+        pub date: NaiveDate,
+        pub employee_key: String,
         // ...
     }
 
@@ -207,10 +237,11 @@ pub mod daily_workings {
 
     pub mod timerecord {
         use crate::Result;
-        use serde::{Deserialize, Serialize};
+        use chrono::{DateTime, NaiveDate, Utc};
+        use serde::{de::Visitor, Deserialize, Serialize};
 
         pub async fn post(access_token: &str, key: &str, req: &Request) -> Result<()> {
-            let Response {} = crate::post(
+            let PostResponse {} = crate::post(
                 access_token,
                 &format!(
                     "https://api.kingtime.jp/v1.0/daily-workings/timerecord/{}",
@@ -225,21 +256,21 @@ pub mod daily_workings {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         pub struct Request {
-            date: String,
-            time: String,
+            pub date: NaiveDate,
+            pub time: DateTime<Utc>,
         }
 
         #[test]
         fn serialize_request() {
             let req = Request {
-                date: "2016-05-01".to_owned(),
-                time: "2016-05-01T09:00:00+09:00".to_owned(),
+                date: "2016-05-01".parse().unwrap(),
+                time: "2016-05-01T09:00:00+09:00".parse().unwrap(),
             };
 
             let json = r##"
             {
                 "date": "2016-05-01",
-                "time": "2016-05-01T09:00:00+09:00",
+                "time": "2016-05-01T00:00:00Z"
             }
             "##;
 
@@ -252,7 +283,182 @@ pub mod daily_workings {
         }
 
         #[derive(Deserialize)]
-        pub struct Response {}
+        struct PostResponse {}
+
+        pub async fn get(
+            access_token: &str,
+            keys: &[&str],
+            start: NaiveDate,
+            end: NaiveDate,
+        ) -> Result<Response> {
+            crate::get_with_query(
+                access_token,
+                "https://api.kingtime.jp/v1.0/daily-workings/timerecord",
+                &[
+                    ("employeeKeys", &*keys.join(",")),
+                    ("start", &start.to_string()),
+                    ("end", &end.to_string()),
+                ],
+            )
+            .await
+        }
+
+        #[derive(Debug, Deserialize)]
+        pub struct Response(pub Vec<DailyWorkings>);
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        pub struct DailyWorkings {
+            pub date: NaiveDate,
+            pub daily_workings: Vec<DailyWorking>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        pub struct DailyWorking {
+            pub date: NaiveDate,
+            pub employee_key: String,
+            pub time_record: Vec<TimeRecord>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        pub struct TimeRecord {
+            pub time: DateTime<Utc>,
+            pub code: Code,
+        }
+
+        #[derive(Debug, Clone, Copy)]
+        pub enum Code {
+            In,
+            Out,
+            BreakIn,
+            BreakOut,
+        }
+
+        struct CodeVisitor;
+
+        impl<'de> Visitor<'de> for CodeVisitor {
+            type Value = Code;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("code must be an str")
+            }
+
+            fn visit_str<E>(self, v: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                let c = match v {
+                    "1" => Code::In,
+                    "2" => Code::Out,
+                    "3" => Code::BreakIn,
+                    "4" => Code::BreakOut,
+                    _ => return Err(E::custom(format!("unknown code: {}", v))),
+                };
+                Ok(c)
+            }
+        }
+
+        impl<'de> Deserialize<'de> for Code {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                deserializer.deserialize_str(CodeVisitor)
+            }
+        }
+
+        impl Serialize for Code {
+            fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                match self {
+                    Code::In => serializer.serialize_str("1"),
+                    Code::Out => serializer.serialize_str("2"),
+                    Code::BreakIn => serializer.serialize_str("3"),
+                    Code::BreakOut => serializer.serialize_str("4"),
+                }
+            }
+        }
+
+        #[test]
+        fn deserialize_response() {
+            let ex = r##"
+            [
+                {
+                  "date": "2016-05-01",
+                  "dailyWorkings": [
+                    {
+                      "date": "2016-05-01",
+                      "employeeKey": "8b6ee646a9620b286499c3df6918c4888a97dd7bbc6a26a18743f4697a1de4b3",
+                      "currentDateEmployee": {
+                        "divisionCode": "1000",
+                        "divisionName": "本社",
+                        "gender": "male",
+                        "typeCode": "1",
+                        "typeName": "正社員",
+                        "code": "1000",
+                        "lastName": "勤怠",
+                        "firstName": "太郎",
+                        "lastNamePhonetics": "キンタイ",
+                        "firstNamePhonetics": "タロウ",
+                        "employeeGroups": [
+                          {
+                            "code": "0001",
+                            "name": "人事部"
+                          },
+                          {
+                            "code": "0002",
+                            "name": "総務部"
+                          }
+                        ]
+                      },
+                      "timeRecord": [
+                        {
+                          "time": "2016-05-01T09:00:00+09:00",
+                          "code": "1",
+                          "name": "出勤",
+                          "divisionCode": "1000",
+                          "divisionName": "本社",
+                          "latitude": 35.6672237,
+                          "longitude": 139.7422207
+                        },
+                        {
+                          "time": "2015-05-01T18:00:00+09:00",
+                          "code": "2",
+                          "name": "退勤",
+                          "divisionCode": "1000",
+                          "divisionName": "本社",
+                          "credentialCode": 300,
+                          "credentialName": "KOTSL",
+                          "latitude": 35.6672237,
+                          "longitude": 139.7422207
+                        },
+                        {
+                          "time": "2016-05-01T10:00:00+09:00",
+                          "code": "3",
+                          "name": "休憩開始",
+                          "divisionCode": "1000",
+                          "divisionName": "本社"
+                        },
+                        {
+                          "time": "2016-05-01T11:00:00+09:00",
+                          "code": "4",
+                          "name": "休憩終了",
+                          "divisionCode": "1000",
+                          "divisionName": "本社"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            "##;
+
+            let _: Response = serde_json::from_str(ex).unwrap();
+        }
     }
 }
 
