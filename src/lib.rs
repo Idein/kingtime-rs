@@ -1,4 +1,5 @@
-use serde::Deserialize;
+use reqwest::header::{self, HeaderMap};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Deserialize)]
@@ -24,33 +25,65 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+async fn get<D: DeserializeOwned>(access_token: &str, api: &str) -> Result<D> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        "application/json; charset=utf-8".parse().unwrap(),
+    );
+    headers.insert(
+        header::AUTHORIZATION,
+        format!("Bearer {}", access_token).parse().unwrap(),
+    );
+
+    let resp: Response<D> = reqwest::Client::new()
+        .get(api)
+        .headers(headers)
+        .send()
+        .await?
+        .json()
+        .await?;
+    match resp {
+        Response::Error { errors } => Err(Error::Api(errors)),
+        Response::Ok(data) => Ok(data),
+    }
+}
+
+async fn post<S: Serialize + ?Sized, D: DeserializeOwned>(
+    access_token: &str,
+    api: &str,
+    payload: &S,
+) -> Result<D> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        "application/json; charset=utf-8".parse().unwrap(),
+    );
+    headers.insert(
+        header::AUTHORIZATION,
+        format!("Bearer {}", access_token).parse().unwrap(),
+    );
+
+    let resp: Response<D> = reqwest::Client::new()
+        .post(api)
+        .headers(headers)
+        .json(payload)
+        .send()
+        .await?
+        .json()
+        .await?;
+    match resp {
+        Response::Error { errors } => Err(Error::Api(errors)),
+        Response::Ok(data) => Ok(data),
+    }
+}
+
 pub mod daily_workings {
-    use super::{Error, Result};
-    use reqwest::header::{self, HeaderMap};
+    use super::Result;
     use serde::Deserialize;
 
     pub async fn get(access_token: &str) -> Result<Response> {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::CONTENT_TYPE,
-            "application/json; charset=utf-8".parse().unwrap(),
-        );
-        headers.insert(
-            header::AUTHORIZATION,
-            format!("Bearer {}", access_token).parse().unwrap(),
-        );
-
-        let resp: super::Response<Response> = reqwest::Client::new()
-            .get("https://api.kingtime.jp/v1.0/daily-workings")
-            .headers(headers)
-            .send()
-            .await?
-            .json()
-            .await?;
-        match resp {
-            super::Response::Error { errors } => Err(Error::Api(errors)),
-            super::Response::Ok(data) => Ok(data),
-        }
+        super::get(access_token, "https://api.kingtime.jp/v1.0/daily-workings").await
     }
 
     #[derive(Debug, Deserialize)]
@@ -72,7 +105,7 @@ pub mod daily_workings {
     }
 
     #[test]
-    fn deserialize() {
+    fn deserialize_response() {
         let ex = r##"
 [
   {
@@ -171,6 +204,56 @@ pub mod daily_workings {
 
         let _: Response = serde_json::from_str(ex).unwrap();
     }
+
+    pub mod timerecord {
+        use crate::Result;
+        use serde::{Deserialize, Serialize};
+
+        pub async fn post(access_token: &str, key: &str, req: &Request) -> Result<()> {
+            let Response {} = crate::post(
+                access_token,
+                &format!(
+                    "https://api.kingtime.jp/v1.0/daily-workings/timerecord/{}",
+                    key
+                ),
+                req,
+            )
+            .await?;
+            Ok(())
+        }
+
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        pub struct Request {
+            date: String,
+            time: String,
+        }
+
+        #[test]
+        fn serialize_request() {
+            let req = Request {
+                date: "2016-05-01".to_owned(),
+                time: "2016-05-01T09:00:00+09:00".to_owned(),
+            };
+
+            let json = r##"
+            {
+                "date": "2016-05-01",
+                "time": "2016-05-01T09:00:00+09:00",
+            }
+            "##;
+
+            let v1 = serde_json::from_str::<serde_json::Value>(json).unwrap();
+            let v2 =
+                serde_json::from_str::<serde_json::Value>(&serde_json::to_string(&req).unwrap())
+                    .unwrap();
+
+            assert_eq!(v1, v2);
+        }
+
+        #[derive(Deserialize)]
+        pub struct Response {}
+    }
 }
 
 #[cfg(test)]
@@ -180,11 +263,6 @@ mod tests {
     #[tokio::test]
     async fn it_works() {
         let token = std::env::var("KINGTIME_ACCESS_TOKEN").unwrap();
-        println!(
-            "{:?}",
-            daily_workings::get(&token)
-                .await
-                .unwrap()
-        );
+        println!("{:?}", daily_workings::get(&token).await.unwrap());
     }
 }
