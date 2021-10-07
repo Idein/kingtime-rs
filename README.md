@@ -1,4 +1,4 @@
-# Rust bindings for the KING OF TIME API
+# Rust bindings for the KING OF TIME API [![Crates.io](https://img.shields.io/crates/v/kingtime)](https://crates.io/crates/kingtime) [![docs.rs](https://img.shields.io/docsrs/kingtime)](https://docs.rs/kingtime/)
 
 ## Example
 
