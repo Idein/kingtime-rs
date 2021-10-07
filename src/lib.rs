@@ -4,7 +4,7 @@ use thiserror::Error;
 
 // KoT API only correctly recognizes iso8061 strings with +09:00
 mod ts_seconds_jst {
-    use chrono::{DateTime, FixedOffset, SecondsFormat, Utc};
+    use chrono::{DateTime, FixedOffset, Utc};
     use serde::ser::Serializer;
     use serde::Serialize;
 
@@ -12,10 +12,8 @@ mod ts_seconds_jst {
     where
         S: Serializer,
     {
-        let str = value.to_rfc3339_opts(SecondsFormat::Secs, false);
-        let value: DateTime<Utc> = str.parse().unwrap();
-        let datetime = value + FixedOffset::east(9 * 3600);
-        datetime.to_rfc3339().serialize(serializer)
+        let jst = FixedOffset::east(9 * 3600);
+        value.with_timezone(&jst).to_rfc3339().serialize(serializer)
     }
 }
 
@@ -311,7 +309,7 @@ pub mod daily_workings {
             let json = r##"
             {
                 "date": "2016-05-01",
-                "time": "2016-05-01T00:00:00Z",
+                "time": "2016-05-01T09:00:00+09:00",
                 "code": "4"
             }
             "##;
